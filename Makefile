@@ -22,14 +22,14 @@ AO_LIBS?=`pkg-config ao --libs`
 OPT=-g -O3
 
 # Compiler flags
-CFLAGS=-std=gnu99 $(OPT) -Wall -I../lib $(FLAC_INC) $(AO_INC)
+CFLAGS=-std=gnu99 -pthread $(OPT) -Wall -I../lib $(FLAC_INC) $(AO_INC)
 
 # Linker flags
-LIBS=$(FLAC_LIBS) $(AO_LIBS) -lm
+LIBS=-pthread $(FLAC_LIBS) $(AO_LIBS) -lm
 
 #### End constants section ####
 
-SRCS=flacplay.c
+SRCS=flacplay.c aobuf.c
 OBJS=${SRCS:%.c=%.o} ../lib/util.o
 
 # Rules for building C

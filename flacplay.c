@@ -6,9 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <all.h>  /* FLAC */
-#include <ao/ao.h>
-
+#include "flacplay.h"
 #include "util.h"
 
 struct file_info {
@@ -16,13 +14,15 @@ struct file_info {
 
   unsigned long nsamples;
   unsigned int bits;
-  unsigned int bytes;
   unsigned int rate;
   unsigned int channels;
   unsigned long length;  /* in 1/100 sec */
 
-  unsigned long cursamp;
-  unsigned long curpos;
+  unsigned long seeksamp;  /* seek offset */
+  unsigned long outoff;  /* output sample corresponding to start of file */
+
+  long cursamp;
+  long curpos;
   unsigned char inum;
 };
 
@@ -33,12 +33,9 @@ static unsigned char vflag = 0;
 static unsigned char qflag = 0;
 
 static int aodriver = -1;
-static ao_device *aodev = (ao_device *) NULL;
-static ao_sample_format aofmt;
-static char aobuf[128 * 1024];  /* 128k */
-static unsigned int aobufpos = 0;
 
 static struct file_info inf;
+static struct aobuf_handle ah;
 
 static int play_file (FLAC__StreamDecoder *decoder,
 		      char *filename, unsigned long skip_hsec, char *errstr);
@@ -123,6 +120,10 @@ int main (int argc, char *argv[]) {
   if(aodriver == -1)
     fatal(1, "could not find audio output driver");
 
+  /* Init output state */
+  ah.opened = 0;
+  inf.outoff = 0;
+
   /* Create a new decoder instance */
   decoder = FLAC__stream_decoder_new();
   if(!decoder)
@@ -133,7 +134,7 @@ int main (int argc, char *argv[]) {
 
   /* Play the files */
   for(f = 0; f < argc; f++) {
-    if(play_file(decoder, argv[f], skip_hsec, errstr))
+    if(play_file(decoder, argv[f], f == 0 ? skip_hsec : 0, errstr))
       fatal(1, "%s", errstr);
   }
 
@@ -146,10 +147,9 @@ int main (int argc, char *argv[]) {
   FLAC__stream_decoder_delete(decoder);
   decoder = (FLAC__StreamDecoder *) NULL;
 
-  if(aodev) {
-    if(ao_close(aodev) == 0)
-      fatal(1, "error closing audio output device");
-    aodev = (ao_device *) NULL;
+  if(ah.opened) {
+    aobuf_finish(&ah);
+    aobuf_free(&ah);
   }
 
   ao_shutdown();
@@ -191,51 +191,51 @@ static int play_file (FLAC__StreamDecoder *decoder,
   }
 
   /* Setup output device if necessary */
-  if(!aodev ||
-     (inf.bits != aofmt.bits ||
-      inf.rate != aofmt.rate ||
-      inf.channels != aofmt.channels)) {
-    if(aodev) {
-      if(ao_close(aodev) == 0) {
-	report_err(errstr, "error closing audio output device");
-	goto error;
-      }
+  if(!ah.opened ||
+     (inf.bits != ah.aofmt.bits ||
+      inf.rate != ah.aofmt.rate ||
+      inf.channels != ah.aofmt.channels)) {
+    if(ah.opened) {
+      aobuf_finish(&ah);
+      aobuf_free(&ah);
     }
+    
+    ah.aofmt.bits = inf.bits;
+    ah.aofmt.rate = inf.rate;
+    ah.aofmt.channels = inf.channels;
+    ah.aofmt.byte_format = AO_FMT_NATIVE;
 
-    aofmt.bits = inf.bits;
-    aofmt.rate = inf.rate;
-    aofmt.channels = inf.channels;
-    aofmt.byte_format = AO_FMT_NATIVE;
+    aobuf_init(&ah, aodriver);
 
-    aodev = ao_open_live(aodriver, &aofmt, (ao_option *) NULL);
-    if(!aodev) {
-      report_err(errstr, "could not open audio output device");
-      goto error;
-    }
+    inf.outoff = 0;
   }
 
   /* Seek to desired start position */
-  inf.cursamp = (skip_hsec * inf.rate) / 100;
-  inf.curpos = skip_hsec;
-  inf.inum = 0;
+  inf.seeksamp = (skip_hsec * inf.rate) / 100;
 
-  if(inf.cursamp > 0) {
-    if(inf.cursamp > inf.nsamples) {
+  if(inf.seeksamp > 0) {
+    if(inf.seeksamp > inf.nsamples) {
       report_err(errstr, "desired start position is past end of file");
       goto error;
     }
 
-    if(!FLAC__stream_decoder_seek_absolute(decoder, inf.cursamp)) {
-      report_err(errstr, "could not seek to sample %ld", inf.cursamp);
+    if(!FLAC__stream_decoder_seek_absolute(decoder, inf.seeksamp)) {
+      report_err(errstr, "could not seek to sample %ld", inf.seeksamp);
       goto error;
     }
   }
+
+  inf.inum = 0;
 
   /* Play the file */
   FLAC__stream_decoder_process_until_end_of_stream(decoder);
 
   if(vflag)
     printf("\n");
+
+  /* Update output offset to account for number of samples played
+     from this file. */
+  inf.outoff += inf.nsamples - inf.seeksamp;
 
   /* Check state */
   state = FLAC__stream_decoder_get_state(decoder);
@@ -259,42 +259,29 @@ static FLAC__StreamDecoderWriteStatus
 		       const FLAC__Frame *frame,
 		       const FLAC__int32 * const buffer[],
 		       void *client_data) {
-  unsigned long samp, nsamp;
-  unsigned int chan, nchan;
-
-  unsigned long tmp;
-  unsigned int el_min, el_sec, el_hsec, rem_min, rem_sec, rem_hsec;
+  unsigned long opos;
+  long tmp;
+  int el_min, el_sec, el_hsec, rem_min, rem_sec, rem_hsec;
 
   /* Check flags */
   if(inf.abort_flag)
     return(FLAC__STREAM_DECODER_WRITE_STATUS_ABORT);
 
-  /* Extract relevant frame info */
-  nsamp = frame->header.blocksize;
-  nchan = frame->header.channels;
-
-  /* Copy into audio buffer */
-  aobufpos = 0;
-
-  for(samp = 0; samp < nsamp; samp++)
-    for(chan = 0; chan < nchan; chan++) {
-      if(sizeof(aobuf) - aobufpos < inf.bytes)
-	fatal(1, "buffer overflow");
-
-      memcpy(aobuf + aobufpos, buffer[chan] + samp, inf.bytes);
-      aobufpos += inf.bytes;
-    }
-
-  /* Play samples */
-  if(!ao_play(aodev, aobuf, aobufpos))
-    return(FLAC__STREAM_DECODER_WRITE_STATUS_ABORT);
+  /* Copy into audio out buffer */
+  aobuf_play(&ah, buffer, frame->header.blocksize, frame->header.channels);
 
   /* Update time */
-  inf.cursamp += nsamp;
+  opos = aobuf_tell(&ah);
+
+  if(opos >= inf.outoff)
+    inf.cursamp = inf.seeksamp + opos - inf.outoff;
+  else
+    inf.cursamp = inf.seeksamp - (inf.outoff - opos);
+
   inf.curpos = inf.cursamp / (inf.rate / 100);
 
   if(vflag && inf.inum == 2) {
-    tmp = inf.curpos;
+    tmp = abs(inf.curpos);
 
     el_min = tmp / 6000;
     tmp -= el_min * 6000;
@@ -310,7 +297,8 @@ static FLAC__StreamDecoderWriteStatus
     tmp -= rem_sec * 100;
     rem_hsec = tmp;
 
-    printf("\rTime: %02d:%02d.%02d [%02d:%02d.%02d]",
+    printf("\rTime: %c%02d:%02d.%02d [%02d:%02d.%02d]",
+           inf.curpos < 0 ? '-' : ' ',
 	   el_min, el_sec, el_hsec, rem_min, rem_sec, rem_hsec);
 
     inf.inum = 0;
@@ -331,7 +319,6 @@ static void metadata_callback (const FLAC__StreamDecoder *decoder,
     /* Copy file info into structure */
     inf.nsamples = metadata->data.stream_info.total_samples & 0xffffffff;
     inf.bits = metadata->data.stream_info.bits_per_sample;
-    inf.bytes = (inf.bits + 7) / 8;
     inf.rate = metadata->data.stream_info.sample_rate;
     inf.channels = metadata->data.stream_info.channels;
     inf.length = inf.nsamples / (inf.rate / 100);
