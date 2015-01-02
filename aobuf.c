@@ -108,8 +108,6 @@ int aobuf_init (struct aobuf_handle *ah,
     error(1, "pthread_attr_init");
 
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-  pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-  pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
 
   if(pthread_create(&(ah->thr), &attr,
                     aobuf_thread, (void *) ah))
