@@ -30,21 +30,30 @@ LIBS=-pthread $(FLAC_LIBS) $(AO_LIBS) -lm
 #### End constants section ####
 
 SRCS=flacplay.c aobuf.c
-OBJS=${SRCS:%.c=%.o} ../lib/util.o
+OBJS=${SRCS:%.c=%.o}
+
+LIB_OBJS=../lib/liblfa.a
 
 # Rules for building C
 
-.SUFFIXES: .c
+.SUFFIXES: .c .o
 
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
 all: flacplay
 
+depend:
+	$(CC) $(CFLAGS) -E -MM $(SRCS) > .depend
+
+../lib/liblfa.a:
+	(cd ../lib && $(MAKE) liblfa.a)
+
 # Rules for flacplay
 
-flacplay: $(OBJS)
-	$(CC) -o $@ $(OBJS) $(LIBS)
+flacplay: $(OBJS) $(LIB_OBJS)
+	$(CC) -o $@ $(OBJS) $(LIB_OBJS) $(LIBS)
 
 clean:
-	rm -f $(OBJS) flacplay *.core *~
+	rm -f $(OBJS) flacplay
+	rm -f .depend
