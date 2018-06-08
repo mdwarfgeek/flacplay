@@ -3,7 +3,7 @@
 
 #include <pthread.h>
 
-#include <all.h>  /* FLAC */
+#include <FLAC/all.h>  /* FLAC */
 #include <ao/ao.h>
 
 /* Audio buffer size in quanta (times), must be a power of two */
