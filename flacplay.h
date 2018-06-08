@@ -18,6 +18,7 @@
 
 struct aobuf_handle {
   int aodriver;
+  struct ao_option *aoopt;
   ao_sample_format aofmt;
 
   pthread_t thr;
@@ -40,7 +41,8 @@ struct aobuf_handle {
 };
 
 int aobuf_init (struct aobuf_handle *ah,
-                int aodriver);
+                int aodriver,
+                struct ao_option *aoopt);
 void aobuf_free (struct aobuf_handle *ah);
 
 void aobuf_play (struct aobuf_handle *ah,

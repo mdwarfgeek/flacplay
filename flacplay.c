@@ -33,6 +33,7 @@ static unsigned char vflag = 0;
 static unsigned char qflag = 0;
 
 static int aodriver = -1;
+static struct ao_option *aoopt = (struct ao_option *) NULL;
 
 static struct file_info inf;
 static struct aobuf_handle ah;
@@ -53,7 +54,7 @@ static void error_callback (const FLAC__StreamDecoder *decoder,
 			    void *client_data);
 
 static void usage (char *av) {
-  fprintf(stderr, "Usage:\t%s [-d device] [-k secs] [-qv] file [...]\n", av);
+  fprintf(stderr, "Usage:\t%s [-d device] [-k secs] [-o driver] [-qv] file [...]\n", av);
   exit(1);
 }
 
@@ -86,18 +87,31 @@ int main (int argc, char *argv[]) {
     aodriver = ao_driver_id("null");
 
   /* Extract command-line arguments */
-  while((c = getopt(argc, argv, "d:k:qv")) != -1)
+  while((c = getopt(argc, argv, "d:k:o:qv")) != -1)
     switch(c) {
     case 'd':
-      aodriver = ao_driver_id(optarg);
-      if(aodriver == -1)
-	fatal(1, "unknown driver: %s", optarg);
+      aoopt = (struct ao_option *) malloc(sizeof(struct ao_option));
+      if(!aoopt)
+        error(1, "malloc");
+
+      aoopt->key = strdup("dev");
+      aoopt->value = strdup(optarg);
+      if(!aoopt->key || !aoopt->value)
+        error(1, "malloc");
+      
+      aoopt->next = (struct ao_option *) NULL;
+
       break;
     case 'k':
       skip_sec = (float) strtod(optarg, &ep);
       if(*ep || !*optarg || skip_sec < 0.0)
 	fatal(1, "bad skip argument: %s: must be a positive number", optarg);
       skip_hsec = (unsigned long) ceil(skip_sec * 100);
+      break;
+    case 'o':
+      aodriver = ao_driver_id(optarg);
+      if(aodriver == -1)
+	fatal(1, "unknown driver: %s", optarg);
       break;
     case 'q':
       qflag++;
@@ -154,6 +168,12 @@ int main (int argc, char *argv[]) {
 
   ao_shutdown();
 
+  if(aoopt) {
+    free((void *) aoopt->key);
+    free((void *) aoopt->value);
+    free((void *) aoopt);
+  }
+  
   return(0);
 }
 
@@ -205,7 +225,7 @@ static int play_file (FLAC__StreamDecoder *decoder,
     ah.aofmt.channels = inf.channels;
     ah.aofmt.byte_format = AO_FMT_NATIVE;
 
-    aobuf_init(&ah, aodriver);
+    aobuf_init(&ah, aodriver, aoopt);
 
     inf.outoff = 0;
   }

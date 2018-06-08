@@ -17,7 +17,7 @@ static void *aobuf_thread (void *data) {
   unsigned int n;
 
   /* Open audio device */
-  aodev = ao_open_live(ah->aodriver, &(ah->aofmt), (ao_option *) NULL);
+  aodev = ao_open_live(ah->aodriver, &(ah->aofmt), ah->aoopt);
   if(!aodev)
     fatal(1, "could not open audio output device");
 
@@ -75,10 +75,12 @@ static void *aobuf_thread (void *data) {
 }
 
 int aobuf_init (struct aobuf_handle *ah,
-                int aodriver) {
+                int aodriver,
+                struct ao_option *aoopt) {
   pthread_attr_t attr;
 
   ah->aodriver = aodriver;
+  ah->aoopt = aoopt;
 
   ah->ip = 0;
   ah->op = 0;
