@@ -9,7 +9,8 @@ a simple curses audio player written by Ulf Betlehem (not sure if it's
 available any more).  It implements pretty much just the minimum
 functionality needed to make this work, i.e. output of the current
 playback time using the -v flag and seeking using the -k flag (offset
-in seconds).  The libao output driver can also be changed with -d.
+in seconds).  The libao output driver can be changed with -o and
+options (such as setting output device for ALSA) with -d.
 
 The audio output is buffered, using pthreads and two threads, one does
 audio output and the other does everything else.  Locking is quite
